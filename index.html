@@ -12,7 +12,7 @@
             overflow: hidden;
             font-family: monospace;
             image-rendering: pixelated; 
-            touch-action: none; /* Заборона стандартного сенсорного прокручування */
+            touch-action: none;
         }
         
         #game-container {
@@ -21,10 +21,9 @@
             height: 100vh;
         }
 
-        /* CANVAS для рендерингу світу */
         #game-canvas {
             display: block;
-            background-color: transparent; /* Фон встановлює body */
+            background-color: transparent;
         }
 
         /* ЦИКЛ ДЕНЬ/НІЧ */
@@ -36,10 +35,10 @@
             height: 100%;
             background-color: rgba(0, 0, 0, 0); 
             pointer-events: none;
-            transition: background-color 2s linear; /* Більш швидкий перехід для тесту */
+            transition: background-color 2s linear;
         }
 
-        /* HUD та ІНТЕРФЕЙС */
+        /* HUD: ЗДОРОВ'Я */
         #hud-top {
             position: fixed;
             top: 10px;
@@ -54,7 +53,6 @@
             display: flex;
             gap: 5px;
         }
-        /* Стиль сердечок (відповідно до зображень) */
         .heart {
             width: 16px;
             height: 16px;
@@ -63,10 +61,10 @@
             box-shadow: 0 0 5px rgba(255, 0, 0, 0.7);
         }
         
-        /* Панель Швидкого Доступу (Hotbar) */
+        /* ПАНЕЛЬ ШВИДКОГО ДОСТУПУ (Hotbar) */
         #hotbar {
             position: fixed;
-            bottom: 80px; /* Над кнопками керування */
+            bottom: 80px; 
             left: 50%;
             transform: translateX(-50%);
             display: flex;
@@ -89,7 +87,7 @@
             box-shadow: 0 0 10px yellow;
         }
 
-        /* КЕРУВАННЯ (ДЖОЙСТИК/КНОПКИ) */
+        /* КЕРУВАННЯ (ПСЕВДО-ДЖОЙСТИК) */
         #controls {
             position: fixed;
             bottom: 5px; 
@@ -111,7 +109,7 @@
             align-items: center;
             justify-content: center;
             user-select: none;
-            touch-action: manipulation; /* Покращення відгуку на сенсор */
+            touch-action: manipulation;
         }
         
         #btn-jump {
@@ -135,12 +133,10 @@
         <canvas id="game-canvas"></canvas>
 
         <div id="hud-top">
-            <div id="health-bar">
-                </div>
-            </div>
+            <div id="health-bar"></div>
+        </div>
 
-        <div id="hotbar">
-            </div>
+        <div id="hotbar"></div>
 
         <div id="controls">
             <div id="btn-left" class="control-button">←</div>
@@ -151,324 +147,7 @@
     </div>
     
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-
-    <script>
-        // === КОНСТАНТИ ГРИ ===
-        const TILE_SIZE = 32;
-        const GAME_FPS = 60;
-        const WORLD_WIDTH = 200; // 200 блоків
-        
-        // Типи блоків та їх кольори
-        const BlockType = {
-            0: { name: 'Air', color: 'transparent', mineable: false, drop: null },
-            1: { name: 'Grass', color: '#4CAF50', mineable: true, drop: 2 },
-            2: { name: 'Dirt', color: '#8B4513', mineable: true, drop: 2 },
-            3: { name: 'Stone', color: '#808080', mineable: true, drop: 3 },
-            4: { name: 'Coal Ore', color: '#333333', mineable: true, drop: 4 },
-            5: { name: 'Wood', color: '#654321', mineable: true, drop: 5 },
-        };
-        
-        // --- ЗМІННІ ГРИ ---
-        const canvas = document.getElementById('game-canvas');
-        const ctx = canvas.getContext('2d');
-        const player = {
-            x: 10 * TILE_SIZE,
-            y: 0,
-            width: TILE_SIZE,
-            height: TILE_SIZE * 2,
-            velX: 0,
-            velY: 0,
-            speed: 4,
-            jumpStrength: 10,
-            onGround: false,
-            health: 10,
-            maxHealth: 10,
-            inventory: Array(9).fill({ type: 0, count: 0 }), // 9 слотів hotbar
-            activeSlot: 0,
-        };
-        
-        let world = []; // 2D масив блоків
-        let cameraX = 0;
-        let isMovingLeft = false;
-        let isMovingRight = false;
-        let gravity = 0.5;
-        
-        // --- ДОМ ЕЛЕМЕНТИ ---
-        const lightOverlay = document.getElementById('light-overlay');
-        const healthBar = document.getElementById('health-bar');
-        const hotbarElement = document.getElementById('hotbar');
-
-        // === МЕХАНІКА ГЕНЕРАЦІЇ СВІТУ (Спрощена) ===
-        function generateWorld() {
-            // Встановлюємо розмір світу
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight - 120; // Мінус HUD/Controls
-            
-            // Базова лінія ґрунту
-            const groundLevel = Math.floor(canvas.height / TILE_SIZE) - 4; 
-            
-            for (let x = 0; x < WORLD_WIDTH; x++) {
-                world[x] = [];
-                // Генерація рельєфу (хвилястий)
-                const heightOffset = Math.floor(Math.sin(x * 0.2) * 2) + 1;
-                
-                for (let y = 0; y < canvas.height / TILE_SIZE; y++) {
-                    world[x][y] = BlockType[0]; // Повітря
-                    
-                    if (y === groundLevel - heightOffset) {
-                        world[x][y] = BlockType[1]; // Трава
-                    } else if (y > groundLevel - heightOffset && y < groundLevel + 4) {
-                        world[x][y] = BlockType[2]; // Земля
-                    } else if (y >= groundLevel + 4) {
-                        world[x][y] = BlockType[3]; // Камінь
-                        // Імітація руди
-                        if (y > groundLevel + 6 && Math.random() < 0.02) {
-                            world[x][y] = BlockType[4]; // Вугілля
-                        }
-                    }
-                }
-                
-                // Просте дерево
-                if (x % 15 === 5) {
-                    for(let y = groundLevel - heightOffset - 1; y < groundLevel - heightOffset + 3; y++) {
-                        world[x][y] = BlockType[5]; // Стовбур
-                    }
-                }
-            }
-            player.y = (groundLevel - Math.floor(Math.sin(10 * 0.2) * 2) - 1) * TILE_SIZE; 
-        }
-
-        // === МЕХАНІКА РУХУ ТА ФІЗИКИ ===
-        function checkCollision(x, y) {
-            const tileX = Math.floor(x / TILE_SIZE);
-            const tileY = Math.floor(y / TILE_SIZE);
-            
-            if (tileX < 0 || tileX >= WORLD_WIDTH || tileY < 0 || tileY >= world[0].length) {
-                return false; // За межами світу
-            }
-            
-            return world[tileX][tileY].mineable; // Зіткнення з твердим блоком
-        }
-        
-        function updatePhysics() {
-            // 1. Горизонтальний рух
-            player.velX = 0;
-            if (isMovingLeft) player.velX = -player.speed;
-            if (isMovingRight) player.velX = player.speed;
-            
-            let newX = player.x + player.velX;
-            // Перевірка горизонтальної колізії
-            if (!checkCollision(newX, player.y) && !checkCollision(newX, player.y + player.height - 1)) {
-                 player.x = newX;
-            }
-
-            // 2. Гравітація та вертикальний рух
-            player.velY += gravity;
-            if (player.velY > 10) player.velY = 10; // Обмеження швидкості
-            
-            let newY = player.y + player.velY;
-            player.onGround = false;
-
-            // Перевірка вертикальної колізії
-            if (player.velY > 0) { // Падаємо
-                if (checkCollision(player.x, newY + player.height) || checkCollision(player.x + player.width - 1, newY + player.height)) {
-                    // Зіткнення з землею
-                    player.velY = 0;
-                    player.y = Math.floor((newY + player.height) / TILE_SIZE) * TILE_SIZE - player.height;
-                    player.onGround = true;
-                } else {
-                    player.y = newY;
-                }
-            } else if (player.velY < 0) { // Стрибаємо вгору
-                if (checkCollision(player.x, newY) || checkCollision(player.x + player.width - 1, newY)) {
-                    player.velY = 0;
-                    player.y = Math.floor(newY / TILE_SIZE) * TILE_SIZE + TILE_SIZE;
-                } else {
-                    player.y = newY;
-                }
-            }
-            
-            // Оновлення камери (Центрування гравця)
-            cameraX = player.x - canvas.width / 2;
-        }
-
-        // === МЕХАНІКА ВИДОБУТКУ/БУДІВНИЦТВА ===
-        function handleAction() {
-            // Розрахунок блоку, на який націлився гравець (наприклад, + 2 блоки від гравця)
-            const targetX = Math.floor((player.x + TILE_SIZE * 2) / TILE_SIZE);
-            const targetY = Math.floor(player.y / TILE_SIZE) + 1; // Блок перед гравцем
-
-            if (targetX < 0 || targetX >= WORLD_WIDTH || targetY >= world[0].length) return;
-
-            const block = world[targetX][targetY];
-            
-            if (block.mineable) {
-                // ВИДОБУТОК: Змінюємо блок на Повітря та додаємо ресурс
-                const dropType = block.drop;
-                world[targetX][targetY] = BlockType[0]; // Видаляємо блок
-                
-                // Додаємо ресурс в інвентар (спрощена логіка)
-                player.inventory[0] = { type: dropType, count: (player.inventory[0].count || 0) + 1 };
-                updateHUD();
-                console.log(`Видобуто: ${block.name}`);
-
-            } else if (player.inventory[player.activeSlot].type !== 0) {
-                // БУДІВНИЦТВО: Якщо є активний предмет, розміщуємо його
-                const itemId = player.inventory[player.activeSlot].type;
-                if (world[targetX][targetY].type === 0) { // Перевірка, чи це повітря
-                    world[targetX][targetY] = BlockType[itemId]; // Розміщуємо блок
-                    player.inventory[player.activeSlot].count -= 1; // Витрачаємо
-                    if (player.inventory[player.activeSlot].count <= 0) {
-                        player.inventory[player.activeSlot] = { type: 0, count: 0 };
-                    }
-                    updateHUD();
-                    console.log(`Розміщено блок: ${BlockType[itemId].name}`);
-                }
-            }
-        }
-        
-        // === МЕХАНІКА ЦИКЛУ ДЕНЬ/НІЧ ===
-        let globalTime = 0;
-
-        function updateDayNight() {
-            globalTime += 1; // Швидкість часу
-            if (globalTime >= 24000) globalTime = 0;
-            
-            // Інтенсивність темряви
-            let darkness = 0; 
-            if (globalTime > 18000 || globalTime < 6000) {
-                // Ніч (Макс. темрява)
-                darkness = 0.6;
-            } else if (globalTime >= 6000 && globalTime < 9000) {
-                // Світанок (від 0.6 до 0)
-                darkness = 0.6 - (globalTime - 6000) / 3000 * 0.6;
-            } else if (globalTime >= 15000 && globalTime < 18000) {
-                // Сутінки (від 0 до 0.6)
-                darkness = (globalTime - 15000) / 3000 * 0.6;
-            }
-
-            // Оновлення накладання освітлення
-            lightOverlay.style.backgroundColor = `rgba(0, 0, 0, ${darkness})`;
-            
-            // Зміна кольору неба (Body)
-            document.body.style.backgroundColor = darkness < 0.4 ? '#5555FF' : '#1A1A50';
-
-            // Якщо dark > 0.5, монстри могли б з'явитися
-        }
-
-        // === СИСТЕМА РЕНДЕРИНГУ ===
-        function draw() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            const startTileX = Math.max(0, Math.floor(cameraX / TILE_SIZE));
-            const endTileX = Math.min(WORLD_WIDTH, startTileX + Math.ceil(canvas.width / TILE_SIZE) + 1);
-
-            // 1. Рендеринг блоків
-            for (let x = startTileX; x < endTileX; x++) {
-                for (let y = 0; y < world[x].length; y++) {
-                    const block = world[x][y];
-                    if (block.type !== 0) {
-                        ctx.fillStyle = block.color;
-                        ctx.fillRect(
-                            x * TILE_SIZE - cameraX, 
-                            canvas.height - (y * TILE_SIZE), // Інвертуємо Y, щоб 0 був знизу
-                            TILE_SIZE, 
-                            TILE_SIZE
-                        );
-                        // Додаткове піксельне оформлення (лінії сітки)
-                        ctx.strokeStyle = '#00000044';
-                        ctx.strokeRect(x * TILE_SIZE - cameraX, canvas.height - (y * TILE_SIZE), TILE_SIZE, TILE_SIZE);
-                    }
-                }
-            }
-
-            // 2. Рендеринг гравця
-            ctx.fillStyle = '#D2B48C';
-            ctx.fillRect(
-                player.x - cameraX, 
-                canvas.height - player.y - player.height, 
-                player.width, 
-                player.height
-            );
-
-            // 3. Рендеринг HUD (Освітлення та UI оновлюється в updateHUD)
-        }
-        
-        // === ОНОВЛЕННЯ HUD ===
-        function updateHUD() {
-            // Оновлення сердечок
-            healthBar.innerHTML = '';
-            for (let i = 0; i < player.maxHealth; i++) {
-                const heart = document.createElement('div');
-                heart.className = 'heart';
-                if (i >= player.health) {
-                    heart.style.backgroundColor = '#333';
-                    heart.style.borderColor = '#111';
-                }
-                healthBar.appendChild(heart);
-            }
-            
-            // Оновлення Hotbar
-            hotbarElement.innerHTML = '';
-            player.inventory.forEach((item, index) => {
-                const slot = document.createElement('div');
-                slot.className = `slot ${index === player.activeSlot ? 'active' : ''}`;
-                slot.textContent = item.count > 0 ? `${BlockType[item.type].name.charAt(0)} (${item.count})` : '';
-                slot.onclick = () => { player.activeSlot = index; updateHUD(); }; // Зміна активного слота
-                hotbarElement.appendChild(slot);
-            });
-        }
-        
-        // === ІГРОВИЙ ЦИКЛ ===
-        function gameLoop() {
-            updatePhysics();
-            updateDayNight();
-            draw();
-            setTimeout(gameLoop, 1000 / GAME_FPS);
-        }
-
-        // === ІНІЦІАЛІЗАЦІЯ КЕРУВАННЯ ===
-        function setupControls() {
-            const controls = {
-                'btn-left': (isDown) => isMovingLeft = isDown,
-                'btn-right': (isDown) => isMovingRight = isDown,
-                'btn-jump': () => { if (player.onGround) player.velY = -player.jumpStrength; },
-                'btn-action': () => handleAction(),
-            };
-
-            Object.entries(controls).forEach(([id, action]) => {
-                const btn = document.getElementById(id);
-                if (btn) {
-                    if (id === 'btn-jump' || id === 'btn-action') {
-                        // Одиничний клік/тап для стрибка та дії
-                        btn.addEventListener('click', (e) => { e.preventDefault(); action(true); });
-                        btn.addEventListener('touchend', (e) => { e.preventDefault(); action(true); }); 
-                    } else {
-                        // Тривале утримання для руху
-                        btn.addEventListener('touchstart', (e) => { e.preventDefault(); action(true); });
-                        btn.addEventListener('touchend', (e) => { e.preventDefault(); action(false); });
-                        // Для десктопу (якщо буде тестуватися)
-                        btn.addEventListener('mousedown', (e) => { e.preventDefault(); action(true); });
-                        btn.addEventListener('mouseup', (e) => { e.preventDefault(); action(false); });
-                    }
-                }
-            });
-        }
-
-        // === ЗАПУСК ГРИ ===
-        function initGame() {
-            Telegram.WebApp.ready();
-            Telegram.WebApp.expand(); 
-            window.addEventListener('resize', generateWorld); // Адаптивність
-            
-            generateWorld();
-            updateHUD(); // Ініціалізація HUD
-            setupControls(); // Ініціалізація кнопок
-            
-            gameLoop(); // Запускаємо основний цикл
-        }
-
-        initGame();
-    </script>
+    
+    <script src="game.js"></script> 
 </body>
 </html>
