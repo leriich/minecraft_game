@@ -1,332 +1,348 @@
-// --- КОНФІГУРАЦІЯ ТА КОНСТАНТИ ---
-const TILE_SIZE = 32;
-const CHUNK_SIZE = 16;
-const WORLD_CHUNKS_X = 100; // Величезний світ
-const GAME_FPS = 60;
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
 
-// Ресурси та ID блоків
-const BlockType = {
-    AIR: 0, GRASS: 1, DIRT: 2, STONE: 3, COAL_ORE: 4, WOOD: 5, LEAVES: 6, 
-    CRAFTING_TABLE: 10, FURNACE: 11, WATER: 20, SAND: 21,
-    DIAMOND_ORE: 50,
-};
+    <script>
+        // === КОНСТАНТИ ГРИ ===
+        const TILE_SIZE = 32;
+        const GAME_FPS = 60;
+        const WORLD_WIDTH = 200; // 200 блоків
+        
+        // Типи блоків та їх кольори
+        const BlockType = {
+            0: { name: 'Air', color: 'transparent', mineable: false, drop: null },
+            1: { name: 'Grass', color: '#4CAF50', mineable: true, drop: 2 },
+            2: { name: 'Dirt', color: '#8B4513', mineable: true, drop: 2 },
+            3: { name: 'Stone', color: '#808080', mineable: true, drop: 3 },
+            4: { name: 'Coal Ore', color: '#333333', mineable: true, drop: 4 },
+            5: { name: 'Wood', color: '#654321', mineable: true, drop: 5 },
+        };
+        
+        // --- ЗМІННІ ГРИ ---
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const player = {
+            x: 10 * TILE_SIZE,
+            y: 0,
+            width: TILE_SIZE,
+            height: TILE_SIZE * 2,
+            velX: 0,
+            velY: 0,
+            speed: 4,
+            jumpStrength: 10,
+            onGround: false,
+            health: 10,
+            maxHealth: 10,
+            inventory: Array(9).fill({ type: 0, count: 0 }), // 9 слотів hotbar
+            activeSlot: 0,
+        };
+        
+        let world = []; // 2D масив блоків
+        let cameraX = 0;
+        let isMovingLeft = false;
+        let isMovingRight = false;
+        let gravity = 0.5;
+        
+        // --- ДОМ ЕЛЕМЕНТИ ---
+        const lightOverlay = document.getElementById('light-overlay');
+        const healthBar = document.getElementById('health-bar');
+        const hotbarElement = document.getElementById('hotbar');
 
-// --- КЛАСИ ТА СИСТЕМИ ---
-
-// 1. КЛАС ГЕНЕРАТОРА СВІТУ (Procedural Generation, Biomes, Caves)
-class WorldGenerator {
-    constructor() {
-        this.worldData = {}; // Зберігання блоків: {chunkX: {chunkY: [data]}}
-        this.perlinNoise = this.initializePerlinNoise(); // Імітація Перліна для рельєфу
-    }
-
-    initializePerlinNoise() {
-        // ... (Тут була б складна реалізація алгоритму Перліна)
-        return { getHeight: (x) => Math.floor(5 + Math.sin(x * 0.1) * 3 + Math.random() * 2) };
-    }
-
-    generateChunk(chunkX) {
-        // Створення нового чанку 
-        const chunk = [];
-        for (let x = 0; x < CHUNK_SIZE; x++) {
-            const tileX = chunkX * CHUNK_SIZE + x;
-            const surfaceY = this.perlinNoise.getHeight(tileX);
+        // === МЕХАНІКА ГЕНЕРАЦІЇ СВІТУ (Спрощена) ===
+        function generateWorld() {
+            // Встановлюємо розмір світу
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight - 120; // Мінус HUD/Controls
             
-            for (let y = 0; y < CHUNK_SIZE * 5; y++) { // Глибокий світ
-                let block = BlockType.AIR;
-                if (y === surfaceY) {
-                    block = BlockType.GRASS;
-                } else if (y < surfaceY && y > surfaceY - 5) {
-                    block = BlockType.DIRT;
-                } else if (y <= surfaceY - 5) {
-                    block = BlockType.STONE;
-                    // Генерація руд (простий шанс)
-                    if (Math.random() < 0.05) block = BlockType.COAL_ORE;
-                    if (Math.random() < 0.005) block = BlockType.DIAMOND_ORE;
+            // Базова лінія ґрунту
+            const groundLevel = Math.floor(canvas.height / TILE_SIZE) - 4; 
+            
+            for (let x = 0; x < WORLD_WIDTH; x++) {
+                world[x] = [];
+                // Генерація рельєфу (хвилястий)
+                const heightOffset = Math.floor(Math.sin(x * 0.2) * 2) + 1;
+                
+                for (let y = 0; y < canvas.height / TILE_SIZE; y++) {
+                    world[x][y] = BlockType[0]; // Повітря
+                    
+                    if (y === groundLevel - heightOffset) {
+                        world[x][y] = BlockType[1]; // Трава
+                    } else if (y > groundLevel - heightOffset && y < groundLevel + 4) {
+                        world[x][y] = BlockType[2]; // Земля
+                    } else if (y >= groundLevel + 4) {
+                        world[x][y] = BlockType[3]; // Камінь
+                        // Імітація руди
+                        if (y > groundLevel + 6 && Math.random() < 0.02) {
+                            world[x][y] = BlockType[4]; // Вугілля
+                        }
+                    }
                 }
-                chunk.push({ type: block, x: tileX, y: y });
+                
+                // Просте дерево
+                if (x % 15 === 5) {
+                    for(let y = groundLevel - heightOffset - 1; y < groundLevel - heightOffset + 3; y++) {
+                        world[x][y] = BlockType[5]; // Стовбур
+                    }
+                }
+            }
+            player.y = (groundLevel - Math.floor(Math.sin(10 * 0.2) * 2) - 1) * TILE_SIZE; 
+        }
+
+        // === МЕХАНІКА РУХУ ТА ФІЗИКИ ===
+        function checkCollision(x, y) {
+            const tileX = Math.floor(x / TILE_SIZE);
+            const tileY = Math.floor(y / TILE_SIZE);
+            
+            if (tileX < 0 || tileX >= WORLD_WIDTH || tileY < 0 || tileY >= world[0].length) {
+                return false; // За межами світу
+            }
+            
+            // Якщо блок існує і він не повітря, вважаємо його твердим
+            return world[tileX][tileY] && world[tileX][tileY].mineable; 
+        }
+        
+        function updatePhysics() {
+            // 1. Горизонтальний рух
+            player.velX = 0;
+            if (isMovingLeft) player.velX = -player.speed;
+            if (isMovingRight) player.velX = player.speed;
+            
+            let newX = player.x + player.velX;
+            
+            // Перевірка горизонтальної колізії (вгорі та внизу)
+            if (!checkCollision(newX, player.y) && 
+                !checkCollision(newX, player.y + player.height - 1)) {
+                 player.x = newX;
+            }
+
+            // 2. Гравітація та вертикальний рух
+            player.velY += gravity;
+            if (player.velY > 10) player.velY = 10; // Обмеження швидкості
+            
+            let newY = player.y + player.velY;
+            player.onGround = false;
+
+            // Перевірка вертикальної колізії
+            if (player.velY > 0) { // Падаємо
+                if (checkCollision(player.x, newY + player.height) || 
+                    checkCollision(player.x + player.width - 1, newY + player.height)) {
+                    // Зіткнення з землею
+                    player.velY = 0;
+                    // Точна корекція позиції
+                    player.y = Math.floor((newY + player.height) / TILE_SIZE) * TILE_SIZE - player.height;
+                    player.onGround = true;
+                } else {
+                    player.y = newY;
+                }
+            } else if (player.velY < 0) { // Стрибаємо вгору
+                if (checkCollision(player.x, newY) || 
+                    checkCollision(player.x + player.width - 1, newY)) {
+                    // Зіткнення головою
+                    player.velY = 0;
+                    player.y = Math.floor(newY / TILE_SIZE) * TILE_SIZE + TILE_SIZE;
+                } else {
+                    player.y = newY;
+                }
+            }
+            
+            // Оновлення камери (Центрування гравця)
+            cameraX = player.x - canvas.width / 2;
+        }
+
+        // === МЕХАНІКА ВИДОБУТКУ/БУДІВНИЦТВА ===
+        function handleAction() {
+            // Розрахунок блоку, на який націлився гравець (наприклад, + 2 блоки від центру)
+            const targetX = Math.floor((player.x + player.width / 2 + (player.velX > 0 ? TILE_SIZE : -TILE_SIZE)) / TILE_SIZE);
+            const targetY = Math.floor(player.y / TILE_SIZE) + 1; // Блок перед гравцем
+
+            if (targetX < 0 || targetX >= WORLD_WIDTH || targetY >= world[0].length || targetY < 0) return;
+
+            const block = world[targetX][targetY];
+            
+            if (block.mineable) {
+                // ВИДОБУТОК: Змінюємо блок на Повітря та додаємо ресурс
+                const dropType = block.drop;
+                world[targetX][targetY] = BlockType[0]; // Видаляємо блок
+                
+                // Додаємо ресурс в інвентар (спрощена логіка: завжди в слот 0)
+                let currentItem = player.inventory[0];
+                if (currentItem.type === dropType || currentItem.type === 0) {
+                    player.inventory[0] = { type: dropType, count: (currentItem.count || 0) + 1 };
+                } else {
+                    // Ускладнити логіку пошуку вільного слота тут
+                }
+                
+                updateHUD();
+                console.log(`Видобуто: ${block.name} at ${targetX}, ${targetY}`);
+
+            } else if (player.inventory[player.activeSlot].type !== 0) {
+                // БУДІВНИЦТВО: Якщо є активний предмет, розміщуємо його
+                const itemId = player.inventory[player.activeSlot].type;
+                if (world[targetX][targetY].type === 0) { // Перевірка, чи це повітря
+                    // Створюємо новий об'єкт блоку, щоб не посилатися на BlockType напряму
+                    world[targetX][targetY] = { ...BlockType[itemId] }; 
+                    player.inventory[player.activeSlot].count -= 1; // Витрачаємо
+                    if (player.inventory[player.activeSlot].count <= 0) {
+                        player.inventory[player.activeSlot] = { type: 0, count: 0 };
+                    }
+                    updateHUD();
+                    console.log(`Розміщено блок: ${BlockType[itemId].name} at ${targetX}, ${targetY}`);
+                }
             }
         }
-        return chunk;
-    }
-    
-    getBlock(x, y) {
-        // Логіка завантаження чанка, якщо його немає
-        // ...
-        return { type: BlockType.AIR }; // Повертаємо блок
-    }
-    
-    setBlock(x, y, type) {
-        // Логіка зміни блоку та збереження даних
-        // ...
-    }
-}
+        
+        // === МЕХАНІКА ЦИКЛУ ДЕНЬ/НІЧ ===
+        let globalTime = 0;
 
-// 2. КЛАС СИСТЕМИ ФІЗИКИ (Gravity, Collision)
-class PhysicsEngine {
-    constructor(world) {
-        this.world = world;
-        this.gravity = 0.5;
-        this.terminalVelocity = 10;
-    }
-    
-    applyPhysics(entity) {
-        // Застосування гравітації
-        entity.velocityY = Math.min(entity.velocityY + this.gravity, this.terminalVelocity);
-        entity.y += entity.velocityY;
+        function updateDayNight() {
+            globalTime += 10; // Швидкість часу
+            if (globalTime >= 24000) globalTime = 0;
+            
+            // Інтенсивність темряви
+            let darkness = 0; 
+            if (globalTime > 18000 || globalTime < 6000) {
+                // Ніч (Макс. темрява)
+                darkness = 0.6;
+            } else if (globalTime >= 6000 && globalTime < 9000) {
+                // Світанок (від 0.6 до 0)
+                darkness = 0.6 - (globalTime - 6000) / 3000 * 0.6;
+            } else if (globalTime >= 15000 && globalTime < 18000) {
+                // Сутінки (від 0 до 0.6)
+                darkness = (globalTime - 15000) / 3000 * 0.6;
+            }
 
-        // Перевірка колізій з блоками світу
-        this.checkCollisions(entity);
-    }
-    
-    checkCollisions(entity) {
-        // ... (Складна логіка перевірки колізії гравця з блоками)
-        // Якщо гравець зіткнувся знизу: entity.y = newY; entity.velocityY = 0; entity.onGround = true;
-    }
-    
-    applyBlockPhysics() {
-        // Логіка падіння піску та гравію
-        // ...
-    }
-}
+            // Оновлення накладання освітлення
+            lightOverlay.style.backgroundColor = `rgba(0, 0, 0, ${darkness})`;
+            
+            // Зміна кольору неба (Body)
+            document.body.style.backgroundColor = darkness < 0.4 ? '#5555FF' : '#1A1A50';
 
-// 3. КЛАС СУТНОСТЕЙ (Гравець та Вороги)
-class Entity {
-    constructor(x, y) {
-        this.x = x;
-        this.y = y;
-        this.width = TILE_SIZE;
-        this.height = TILE_SIZE * 2;
-        this.velocityX = 0;
-        this.velocityY = 0;
-        this.health = 10;
-        this.maxHealth = 10;
-        this.onGround = false;
-        this.facing = 'right';
-    }
-    
-    takeDamage(amount) {
-        this.health -= amount;
-        if (this.health <= 0) this.die();
-    }
-    
-    die() {
-        // ... (Логіка смерті та дропу предметів)
-    }
-}
-
-class Player extends Entity {
-    constructor(x, y) {
-        super(x, y);
-        this.hunger = 20;
-        this.maxHunger = 20;
-        this.inventory = new Inventory();
-        this.currentTool = 'Pickaxe';
-    }
-    
-    // Рух та дія
-    move(direction) {
-        this.velocityX = direction * 5;
-        this.facing = direction > 0 ? 'right' : 'left';
-    }
-    
-    jump() {
-        if (this.onGround) {
-            this.velocityY = -10;
-            this.onGround = false;
+            // ... Тут була б логіка спауну монстрів, якщо darkness > 0.5
         }
-    }
-    
-    mine(targetBlock) {
-        // ... (Логіка часу видобутку, залежно від інструменту)
-        // world.setBlock(targetBlock.x, targetBlock.y, BlockType.AIR);
-    }
-    
-    placeBlock(type) {
-        // ... (Логіка розміщення блоку, перевірка інвентарю)
-    }
-}
 
-class Mob extends Entity {
-    constructor(x, y, type) {
-        super(x, y);
-        this.type = type; // SLIME, SKELETON, ZOMBIE
-        this.aiState = 'idle';
-    }
-    
-    updateAI(player) {
-        // ... (Складна логіка AI: пошук шляху, напад, уникнення)
-    }
-}
+        // === СИСТЕМА РЕНДЕРИНГУ ===
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-// 4. КЛАС ІНВЕНТАРЮ ТА КРАФТИНГУ
-class Inventory {
-    constructor() {
-        this.slots = new Array(30).fill(null); // 30 слотів інвентарю
-        this.hotbarSlots = 9;
-    }
-    
-    addItem(item, count) {
-        // ... (Логіка додавання, стекування предметів)
-    }
-    
-    removeItem(slotIndex, count) {
-        // ... (Логіка видалення)
-    }
-}
+            const startTileX = Math.max(0, Math.floor(cameraX / TILE_SIZE));
+            const endTileX = Math.min(WORLD_WIDTH, startTileX + Math.ceil(canvas.width / TILE_SIZE) + 1);
 
-class CraftingSystem {
-    constructor() {
-        this.recipes = this.loadRecipes();
-    }
-    
-    loadRecipes() {
-        // ... (Тут буде ТИСЯЧА РЯДКІВ рецептів:
-        // { output: {id: 101, count: 1}, required: [{id: 5, count: 3}, {id: 6, count: 2}] }
-        // )
-        return {
-            'A1B1C1D1': { output: { id: 10, count: 1 }, name: "Crafting Table" }, // 4x Wood Planks
-            // ... сотні рецептів
-        };
-    }
-    
-    craft(inputItems, workbenchType) {
-        // ... (Логіка перевірки введених елементів за рецептами)
-    }
-}
+            // 1. Рендеринг блоків
+            for (let x = startTileX; x < endTileX; x++) {
+                for (let y = 0; y < world[x].length; y++) {
+                    const block = world[x][y];
+                    if (block.type !== 0) {
+                        ctx.fillStyle = block.color;
+                        ctx.fillRect(
+                            x * TILE_SIZE - cameraX, 
+                            canvas.height - (y * TILE_SIZE), // Інвертуємо Y
+                            TILE_SIZE, 
+                            TILE_SIZE
+                        );
+                        // Лінії сітки
+                        ctx.strokeStyle = '#00000044';
+                        ctx.strokeRect(x * TILE_SIZE - cameraX, canvas.height - (y * TILE_SIZE), TILE_SIZE, TILE_SIZE);
+                    }
+                }
+            }
 
-// 5. КЛАС СИСТЕМИ РЕНДЕРИНГУ
-class Renderer {
-    constructor(canvas, world, player) {
-        this.ctx = canvas.getContext('2d');
-        this.world = world;
-        this.player = player;
-        this.canvas = canvas;
-    }
-    
-    render() {
-        // 1. Очистка
-        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-        
-        // 2. Розрахунок зміщення (Camera follow)
-        const offsetX = this.canvas.width / 2 - this.player.x;
-        
-        // 3. Рендеринг світу
-        this.ctx.save();
-        this.ctx.translate(offsetX, 0);
-        this.renderBlocks();
-        this.renderMobs();
-        
-        // 4. Рендеринг гравця
-        this.renderPlayer();
-        this.ctx.restore();
-        
-        // 5. Рендеринг HUD (незалежно від прокрутки)
-        this.renderHUD();
-    }
-    
-    renderBlocks() {
-        // ... (Логіка малювання блоків з world.worldData)
-        // ... (Логіка освітлення від факелів)
-    }
-    
-    renderPlayer() {
-        // ... (Логіка малювання персонажа з анімацією ходьби/стрибка)
-    }
-    
-    renderHUD() {
-        // ... (Оновлення DOM елементів для здоров'я, голоду, hotbar)
-    }
-}
-
-// 6. КЛАС ЦИКЛУ ДЕНЬ/НІЧ
-class DayNightCycle {
-    constructor() {
-        this.time = 0; // 0 до 24000 (один день)
-        this.skyColor = '';
-    }
-    
-    update() {
-        this.time += 10; // Швидкість часу
-        if (this.time >= 24000) this.time = 0;
-        
-        // Зміна кольору неба та інтенсивності накладання
-        if (this.time < 6000 || this.time > 18000) {
-            // Ніч: темний фон, поява монстрів
-            this.skyColor = '#1A1A50';
-            // ... Логіка спауну монстрів
-        } else {
-            // День
-            this.skyColor = '#5555FF';
+            // 2. Рендеринг гравця (персонаж з зображення)
+            // Тимчасово малюємо прямокутник як персонажа
+            ctx.fillStyle = '#C16A3C'; // Колір шкіри/одягу
+            ctx.fillRect(
+                player.x - cameraX, 
+                canvas.height - player.y - player.height, 
+                player.width, 
+                player.height
+            );
+            // Імітація бороди з зображення
+            ctx.fillStyle = '#333333';
+            ctx.fillRect(player.x - cameraX + 8, canvas.height - player.y - player.height + 10, 16, 8);
         }
-        document.body.style.backgroundColor = this.skyColor;
-        // ... Логіка оновлення освітлення (light-overlay)
-    }
-}
+        
+        // === ОНОВЛЕННЯ HUD ===
+        function updateHUD() {
+            // Оновлення сердечок
+            healthBar.innerHTML = '';
+            for (let i = 0; i < player.maxHealth; i++) {
+                const heart = document.createElement('div');
+                heart.className = 'heart';
+                if (i >= player.health) {
+                    heart.style.backgroundColor = '#333'; // Пусте серце
+                }
+                healthBar.appendChild(heart);
+            }
+            
+            // Оновлення Hotbar
+            hotbarElement.innerHTML = '';
+            player.inventory.forEach((item, index) => {
+                const slot = document.createElement('div');
+                slot.className = `slot ${index === player.activeSlot ? 'active' : ''}`;
+                
+                // Відображення предмета/блоку
+                if (item.type !== 0) {
+                     const blockInfo = BlockType[item.type];
+                     slot.style.backgroundColor = blockInfo.color;
+                     slot.style.color = 'white';
+                     slot.textContent = `x${item.count}`;
+                } else {
+                     slot.textContent = index + 1; // Номер слоту
+                }
+                
+                // Функція кліку для зміни активного слота
+                slot.onclick = () => { player.activeSlot = index; updateHUD(); }; 
+                hotbarElement.appendChild(slot);
+            });
+        }
+        
+        // === ІГРОВИЙ ЦИКЛ ===
+        function gameLoop() {
+            updatePhysics();
+            updateDayNight();
+            draw();
+            setTimeout(gameLoop, 1000 / GAME_FPS);
+        }
 
+        // === ІНІЦІАЛІЗАЦІЯ КЕРУВАННЯ ===
+        function setupControls() {
+            const controls = {
+                'btn-left': (isDown) => isMovingLeft = isDown,
+                'btn-right': (isDown) => isMovingRight = isDown,
+                'btn-jump': () => { if (player.onGround) player.velY = -player.jumpStrength; },
+                'btn-action': () => handleAction(),
+            };
 
-// --- ІГРОВИЙ КОНТРОЛЕР (ГОЛОВНИЙ ЦИКЛ) ---
-class GameController {
-    constructor() {
-        this.canvas = document.getElementById('game-canvas');
-        this.canvas.width = window.innerWidth;
-        this.canvas.height = window.innerHeight - 80; // Мінус HUD
-        
-        this.worldGenerator = new WorldGenerator();
-        this.physicsEngine = new PhysicsEngine(this.worldGenerator);
-        this.dayNightCycle = new DayNightCycle();
-        this.craftingSystem = new CraftingSystem();
-        
-        this.player = new Player(500, 300);
-        this.renderer = new Renderer(this.canvas, this.worldGenerator, this.player);
-        this.mobs = [];
-        
-        this.initializeControls();
-        this.worldGenerator.generateChunk(0); // Початкова генерація
-    }
-    
-    initializeControls() {
-        // ... (Прив'язка touchstart/touchend до this.player.move та this.player.jump)
-        // ... (Прив'язка кліку по екрану до this.player.mine та this.player.placeBlock)
-        
-        // Прив'язка кнопки інвентарю/крафтингу
-        // document.getElementById('inventory-button').addEventListener('click', () => {
-        //     // ... Логіка відкриття/закриття інвентарю
-        // });
-    }
-    
-    gameLoop() {
-        // 1. Оновлення вводу (Controls handled by event listeners)
+            Object.entries(controls).forEach(([id, action]) => {
+                const btn = document.getElementById(id);
+                if (btn) {
+                    if (id === 'btn-jump' || id === 'btn-action') {
+                        // Одиничний клік/тап для стрибка та дії
+                        btn.addEventListener('touchstart', (e) => { e.preventDefault(); action(true); });
+                        btn.addEventListener('click', (e) => { e.preventDefault(); action(true); }); 
+                        // Вимикаємо безперервний рух для стрибка та дії
+                    } else {
+                        // Тривале утримання для руху
+                        btn.addEventListener('touchstart', (e) => { e.preventDefault(); action(true); });
+                        btn.addEventListener('touchend', (e) => { e.preventDefault(); action(false); });
+                        
+                        // Підтримка десктопу для тесту
+                        btn.addEventListener('mousedown', (e) => { e.preventDefault(); action(true); });
+                        btn.addEventListener('mouseup', (e) => { e.preventDefault(); action(false); });
+                    }
+                }
+            });
+        }
 
-        // 2. Оновлення фізики та сутностей
-        this.physicsEngine.applyPhysics(this.player);
-        this.mobs.forEach(mob => {
-            mob.updateAI(this.player);
-            this.physicsEngine.applyPhysics(mob);
-        });
-        
-        // 3. Оновлення світу
-        this.physicsEngine.applyBlockPhysics();
-        this.dayNightCycle.update();
-        
-        // 4. Рендеринг
-        this.renderer.render();
-        
-        setTimeout(() => this.gameLoop(), 1000 / GAME_FPS);
-    }
-    
-    start() {
-        console.log("Survival Terraria 2D запущено. Готуйтеся до виживання!");
-        this.gameLoop();
-    }
-}
+        // === ЗАПУСК ГРИ ===
+        function initGame() {
+            Telegram.WebApp.ready();
+            Telegram.WebApp.expand(); 
+            window.addEventListener('resize', generateWorld); // Адаптивність
+            
+            generateWorld();
+            updateHUD(); // Ініціалізація HUD
+            setupControls(); // Ініціалізація кнопок
+            
+            gameLoop(); // Запускаємо основний цикл
+        }
 
-// Запуск гри
-window.onload = () => {
-    // Ініціалізація Telegram WebApp SDK
-    Telegram.WebApp.ready();
-    Telegram.WebApp.expand();
-    
-    const game = new GameController();
-    game.start();
-};
+        initGame();
+    </script>
